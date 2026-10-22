@@ -20,6 +20,9 @@
 
     <modules>
         <module>common-events</module>
+        <module>order-service</module>
+        <module>common-kafka</module>
+        <module>payment-service</module>
     </modules>
 
     <properties>
