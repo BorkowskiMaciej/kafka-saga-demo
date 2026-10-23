@@ -1,6 +1,5 @@
 package pl.sagademo.payment.messaging;
 
-import java.util.Map;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,12 +29,7 @@ public class OrderCreatedListener {
     @KafkaListener(topics = Topics.ORDER_CREATED)
     public void onOrderCreated(ConsumerRecord<String, String> record) {
         EventEnvelope<OrderCreated> event = codec.read(record.value(), OrderCreated.class);
-        MDC.setContextMap(Map.of(
-                "eventId", event.eventId().toString(),
-                "orderId", event.orderId().toString(),
-                "topic", record.topic(),
-                "partition", String.valueOf(record.partition()),
-                "offset", String.valueOf(record.offset())));
+        MDC.setContextMap(KafkaRecords.logContext(record, event));
         try {
             log.info("Received OrderCreated");
             paymentService.process(event.payload(), KafkaRecords.correlationId(record));

@@ -88,4 +88,28 @@ public class Order {
     public List<OrderLine> getItems() {
         return Collections.unmodifiableList(items);
     }
+
+    public void markPaid() {
+        requireStatus(OrderStatus.CREATED, "mark as paid");
+        status = OrderStatus.PAID;
+    }
+
+    public void confirm() {
+        requireStatus(OrderStatus.PAID, "confirm");
+        status = OrderStatus.CONFIRMED;
+    }
+
+    public void cancel(CancellationReason reason) {
+        if (status != OrderStatus.CREATED && status != OrderStatus.PAID) {
+            throw new InvalidOrderTransitionException(id, status, "cancel");
+        }
+        status = OrderStatus.CANCELLED;
+        cancellationReason = reason;
+    }
+
+    private void requireStatus(OrderStatus expected, String action) {
+        if (status != expected) {
+            throw new InvalidOrderTransitionException(id, status, action);
+        }
+    }
 }

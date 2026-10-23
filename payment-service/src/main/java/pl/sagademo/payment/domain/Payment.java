@@ -82,4 +82,11 @@ public class Payment {
     public Instant getCreatedAt() {
         return createdAt;
     }
+
+    public void markRefunded() {
+        if (status != PaymentStatus.COMPLETED) {
+            throw new IllegalStateException("Payment " + id + " cannot be refunded from status " + status);
+        }
+        status = PaymentStatus.REFUNDED;
+    }
 }

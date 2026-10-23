@@ -1,5 +1,6 @@
 package pl.sagademo.payment.service;
 
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -10,8 +11,10 @@ import pl.sagademo.events.Topics;
 import pl.sagademo.events.payload.OrderCreated;
 import pl.sagademo.events.payload.PaymentCompleted;
 import pl.sagademo.events.payload.PaymentFailed;
+import pl.sagademo.events.payload.PaymentRefunded;
 import pl.sagademo.kafka.EventPublisher;
 import pl.sagademo.payment.domain.Payment;
+import pl.sagademo.payment.domain.PaymentNotFoundException;
 import pl.sagademo.payment.domain.PaymentRepository;
 
 @Service
@@ -56,5 +59,20 @@ public class PaymentService {
                         new PaymentFailed(order.orderId(), decision.reason())),
                 correlationId);
         log.info("Payment failed paymentId={} reason={}", payment.getId(), decision.reason());
+    }
+
+    @Transactional
+    public void refund(UUID orderId, String correlationId) {
+        Payment payment = paymentRepository.findByOrderId(orderId)
+                .orElseThrow(() -> new PaymentNotFoundException(orderId));
+        payment.markRefunded();
+        eventPublisher.publish(
+                Topics.PAYMENT_REFUNDED,
+                EventEnvelope.of(
+                        EventTypes.PAYMENT_REFUNDED,
+                        orderId,
+                        new PaymentRefunded(orderId, payment.getId(), payment.getAmount())),
+                correlationId);
+        log.info("Payment refunded paymentId={} amount={}", payment.getId(), payment.getAmount());
     }
 }
