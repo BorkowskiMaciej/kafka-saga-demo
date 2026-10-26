@@ -57,6 +57,14 @@ public final class SagaEnvironment {
         inventoryService.awaitReady(READY_TIMEOUT);
     }
 
+    public void pauseKafka() {
+        infrastructure.pauseKafka();
+    }
+
+    public void resumeKafka() {
+        infrastructure.resumeKafka();
+    }
+
     public Database database() {
         return database;
     }

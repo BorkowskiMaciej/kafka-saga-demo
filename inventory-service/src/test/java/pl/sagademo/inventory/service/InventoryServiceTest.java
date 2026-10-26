@@ -27,7 +27,7 @@ import pl.sagademo.inventory.domain.Product;
 import pl.sagademo.inventory.domain.ProductRepository;
 import pl.sagademo.inventory.domain.Reservation;
 import pl.sagademo.inventory.domain.ReservationRepository;
-import pl.sagademo.kafka.EventPublisher;
+import pl.sagademo.kafka.OutboxWriter;
 
 @ExtendWith(MockitoExtension.class)
 class InventoryServiceTest {
@@ -42,7 +42,7 @@ class InventoryServiceTest {
     private ReservationRepository reservationRepository;
 
     @Mock
-    private EventPublisher eventPublisher;
+    private OutboxWriter outboxWriter;
 
     @Captor
     private ArgumentCaptor<EventEnvelope<?>> envelopeCaptor;
@@ -62,7 +62,7 @@ class InventoryServiceTest {
 
         assertThat(product.getStock()).isEqualTo(8);
         verify(reservationRepository).save(any(Reservation.class));
-        verify(eventPublisher).publish(eq(Topics.STOCK_RESERVED), envelopeCaptor.capture(), eq("corr-1"));
+        verify(outboxWriter).enqueue(eq(Topics.STOCK_RESERVED), envelopeCaptor.capture(), eq("corr-1"));
         assertThat(envelopeCaptor.getValue().eventType()).isEqualTo(EventTypes.STOCK_RESERVED);
         assertThat(envelopeCaptor.getValue().orderId()).isEqualTo(orderId);
     }
@@ -92,7 +92,7 @@ class InventoryServiceTest {
         inventoryService.reserveStock(orderId, "corr-3");
 
         assertThat(product.getStock()).isEqualTo(5);
-        verify(eventPublisher).publish(eq(Topics.STOCK_REJECTED), envelopeCaptor.capture(), eq("corr-3"));
+        verify(outboxWriter).enqueue(eq(Topics.STOCK_REJECTED), envelopeCaptor.capture(), eq("corr-3"));
         StockRejected payload = (StockRejected) envelopeCaptor.getValue().payload();
         assertThat(payload.missingProductIds()).containsExactly("p-2");
     }
@@ -112,7 +112,7 @@ class InventoryServiceTest {
 
         assertThat(available.getStock()).isEqualTo(10);
         assertThat(soldOut.getStock()).isZero();
-        verify(eventPublisher).publish(eq(Topics.STOCK_REJECTED), envelopeCaptor.capture(), eq("corr-4"));
+        verify(outboxWriter).enqueue(eq(Topics.STOCK_REJECTED), envelopeCaptor.capture(), eq("corr-4"));
         StockRejected payload = (StockRejected) envelopeCaptor.getValue().payload();
         assertThat(payload.missingProductIds()).containsExactly("p-3");
     }
@@ -126,7 +126,7 @@ class InventoryServiceTest {
 
         inventoryService.reserveStock(orderId, "corr-5");
 
-        verify(eventPublisher).publish(eq(Topics.STOCK_REJECTED), envelopeCaptor.capture(), eq("corr-5"));
+        verify(outboxWriter).enqueue(eq(Topics.STOCK_REJECTED), envelopeCaptor.capture(), eq("corr-5"));
         StockRejected payload = (StockRejected) envelopeCaptor.getValue().payload();
         assertThat(payload.missingProductIds()).containsExactly("p-9");
     }
@@ -138,6 +138,6 @@ class InventoryServiceTest {
 
         assertThatThrownBy(() -> inventoryService.reserveStock(orderId, "corr-6"))
                 .isInstanceOf(OrderNotKnownException.class);
-        verifyNoInteractions(eventPublisher);
+        verifyNoInteractions(outboxWriter);
     }
 }

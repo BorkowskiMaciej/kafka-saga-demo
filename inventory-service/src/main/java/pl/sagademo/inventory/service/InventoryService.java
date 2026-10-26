@@ -22,7 +22,7 @@ import pl.sagademo.inventory.domain.Product;
 import pl.sagademo.inventory.domain.ProductRepository;
 import pl.sagademo.inventory.domain.Reservation;
 import pl.sagademo.inventory.domain.ReservationRepository;
-import pl.sagademo.kafka.EventPublisher;
+import pl.sagademo.kafka.OutboxWriter;
 
 @Service
 public class InventoryService {
@@ -32,17 +32,17 @@ public class InventoryService {
     private final ProductRepository productRepository;
     private final OrderLineSnapshotRepository snapshotRepository;
     private final ReservationRepository reservationRepository;
-    private final EventPublisher eventPublisher;
+    private final OutboxWriter outboxWriter;
 
     public InventoryService(
             ProductRepository productRepository,
             OrderLineSnapshotRepository snapshotRepository,
             ReservationRepository reservationRepository,
-            EventPublisher eventPublisher) {
+            OutboxWriter outboxWriter) {
         this.productRepository = productRepository;
         this.snapshotRepository = snapshotRepository;
         this.reservationRepository = reservationRepository;
-        this.eventPublisher = eventPublisher;
+        this.outboxWriter = outboxWriter;
     }
 
     @Transactional
@@ -78,7 +78,7 @@ public class InventoryService {
         if (missing.isEmpty()) {
             required.forEach((productId, quantity) -> products.get(productId).decrease(quantity));
             reservationRepository.save(Reservation.reserved(orderId));
-            eventPublisher.publish(
+            outboxWriter.enqueue(
                     Topics.STOCK_RESERVED,
                     EventEnvelope.of(EventTypes.STOCK_RESERVED, orderId, new StockReserved(orderId)),
                     correlationId);
@@ -87,7 +87,7 @@ public class InventoryService {
         }
 
         reservationRepository.save(Reservation.rejected(orderId));
-        eventPublisher.publish(
+        outboxWriter.enqueue(
                 Topics.STOCK_REJECTED,
                 EventEnvelope.of(EventTypes.STOCK_REJECTED, orderId, new StockRejected(orderId, missing)),
                 correlationId);

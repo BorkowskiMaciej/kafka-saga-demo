@@ -12,7 +12,7 @@ import pl.sagademo.events.EventTypes;
 import pl.sagademo.events.Topics;
 import pl.sagademo.events.payload.OrderCreated;
 import pl.sagademo.events.payload.OrderItem;
-import pl.sagademo.kafka.EventPublisher;
+import pl.sagademo.kafka.OutboxWriter;
 import pl.sagademo.order.api.CreateOrderRequest;
 import pl.sagademo.order.api.OrderResponse;
 import pl.sagademo.order.domain.Order;
@@ -25,11 +25,11 @@ public class OrderService {
     private static final Logger log = LoggerFactory.getLogger(OrderService.class);
 
     private final OrderRepository orderRepository;
-    private final EventPublisher eventPublisher;
+    private final OutboxWriter outboxWriter;
 
-    public OrderService(OrderRepository orderRepository, EventPublisher eventPublisher) {
+    public OrderService(OrderRepository orderRepository, OutboxWriter outboxWriter) {
         this.orderRepository = orderRepository;
-        this.eventPublisher = eventPublisher;
+        this.outboxWriter = outboxWriter;
     }
 
     @Transactional
@@ -43,7 +43,7 @@ public class OrderService {
         Order order = orderRepository.save(Order.create(orderId, request.customerId(), items, payload.totalAmount()));
 
         String correlationId = UUID.randomUUID().toString();
-        eventPublisher.publish(
+        outboxWriter.enqueue(
                 Topics.ORDER_CREATED,
                 EventEnvelope.of(EventTypes.ORDER_CREATED, orderId, payload),
                 correlationId);

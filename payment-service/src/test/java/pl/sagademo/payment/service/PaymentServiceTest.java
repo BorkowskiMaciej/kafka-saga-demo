@@ -30,7 +30,7 @@ import pl.sagademo.events.payload.PaymentCompleted;
 import pl.sagademo.events.payload.PaymentFailed;
 import pl.sagademo.events.payload.PaymentFailureReason;
 import pl.sagademo.events.payload.PaymentRefunded;
-import pl.sagademo.kafka.EventPublisher;
+import pl.sagademo.kafka.OutboxWriter;
 import pl.sagademo.payment.domain.Payment;
 import pl.sagademo.payment.domain.PaymentNotFoundException;
 import pl.sagademo.payment.domain.PaymentRepository;
@@ -43,7 +43,7 @@ class PaymentServiceTest {
     private PaymentRepository paymentRepository;
 
     @Mock
-    private EventPublisher eventPublisher;
+    private OutboxWriter outboxWriter;
 
     @Captor
     private ArgumentCaptor<EventEnvelope<?>> envelopeCaptor;
@@ -53,17 +53,17 @@ class PaymentServiceTest {
     @BeforeEach
     void setUp() {
         PaymentRules rules = new PaymentRules(new PaymentProperties(new BigDecimal("5000.00"), new BigDecimal("13.13")));
-        paymentService = new PaymentService(rules, paymentRepository, eventPublisher);
+        paymentService = new PaymentService(rules, paymentRepository, outboxWriter);
         lenient().when(paymentRepository.save(any(Payment.class))).then(returnsFirstArg());
     }
 
     @Test
-    void publishesPaymentCompletedForApprovedOrder() {
+    void enqueuesPaymentCompletedForApprovedOrder() {
         OrderCreated order = orderWithUnitPrice("100.00");
 
         paymentService.process(order, "corr-1");
 
-        verify(eventPublisher).publish(eq(Topics.PAYMENT_COMPLETED), envelopeCaptor.capture(), eq("corr-1"));
+        verify(outboxWriter).enqueue(eq(Topics.PAYMENT_COMPLETED), envelopeCaptor.capture(), eq("corr-1"));
         EventEnvelope<?> envelope = envelopeCaptor.getValue();
         assertThat(envelope.eventType()).isEqualTo(EventTypes.PAYMENT_COMPLETED);
         assertThat(envelope.orderId()).isEqualTo(order.orderId());
@@ -72,29 +72,29 @@ class PaymentServiceTest {
     }
 
     @Test
-    void publishesPaymentFailedWhenLimitExceeded() {
+    void enqueuesPaymentFailedWhenLimitExceeded() {
         OrderCreated order = orderWithUnitPrice("6000.00");
 
         paymentService.process(order, "corr-2");
 
-        verify(eventPublisher).publish(eq(Topics.PAYMENT_FAILED), envelopeCaptor.capture(), eq("corr-2"));
+        verify(outboxWriter).enqueue(eq(Topics.PAYMENT_FAILED), envelopeCaptor.capture(), eq("corr-2"));
         PaymentFailed payload = (PaymentFailed) envelopeCaptor.getValue().payload();
         assertThat(payload.reason()).isEqualTo(PaymentFailureReason.LIMIT_EXCEEDED);
     }
 
     @Test
-    void publishesPaymentFailedWhenCardDeclined() {
+    void enqueuesPaymentFailedWhenCardDeclined() {
         OrderCreated order = orderWithUnitPrice("13.13");
 
         paymentService.process(order, "corr-3");
 
-        verify(eventPublisher).publish(eq(Topics.PAYMENT_FAILED), envelopeCaptor.capture(), eq("corr-3"));
+        verify(outboxWriter).enqueue(eq(Topics.PAYMENT_FAILED), envelopeCaptor.capture(), eq("corr-3"));
         PaymentFailed payload = (PaymentFailed) envelopeCaptor.getValue().payload();
         assertThat(payload.reason()).isEqualTo(PaymentFailureReason.CARD_DECLINED);
     }
 
     @Test
-    void refundsCompletedPaymentAndPublishesPaymentRefunded() {
+    void refundsCompletedPaymentAndEnqueuesPaymentRefunded() {
         UUID orderId = UUID.randomUUID();
         Payment payment = Payment.completed(orderId, new BigDecimal("100.00"));
         when(paymentRepository.findByOrderId(orderId)).thenReturn(Optional.of(payment));
@@ -102,7 +102,7 @@ class PaymentServiceTest {
         paymentService.refund(orderId, "corr-4");
 
         assertThat(payment.getStatus()).isEqualTo(PaymentStatus.REFUNDED);
-        verify(eventPublisher).publish(eq(Topics.PAYMENT_REFUNDED), envelopeCaptor.capture(), eq("corr-4"));
+        verify(outboxWriter).enqueue(eq(Topics.PAYMENT_REFUNDED), envelopeCaptor.capture(), eq("corr-4"));
         EventEnvelope<?> envelope = envelopeCaptor.getValue();
         assertThat(envelope.eventType()).isEqualTo(EventTypes.PAYMENT_REFUNDED);
         PaymentRefunded payload = (PaymentRefunded) envelope.payload();
@@ -117,7 +117,7 @@ class PaymentServiceTest {
 
         assertThatThrownBy(() -> paymentService.refund(orderId, "corr-5"))
                 .isInstanceOf(PaymentNotFoundException.class);
-        verifyNoInteractions(eventPublisher);
+        verifyNoInteractions(outboxWriter);
     }
 
     private OrderCreated orderWithUnitPrice(String unitPrice) {

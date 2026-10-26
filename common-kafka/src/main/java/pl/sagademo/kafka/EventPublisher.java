@@ -2,6 +2,7 @@ package pl.sagademo.kafka;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -27,14 +28,9 @@ public class EventPublisher {
     }
 
     public void publish(String topic, EventEnvelope<?> envelope, String correlationId) {
-        ProducerRecord<String, String> record =
-                new ProducerRecord<>(topic, envelope.orderId().toString(), codec.write(envelope));
-        record.headers().add(EventHeaders.CORRELATION_ID, correlationId.getBytes(StandardCharsets.UTF_8));
-
         try {
-            SendResult<String, String> result = kafkaTemplate.send(record)
-                    .orTimeout(sendTimeout.toMillis(), TimeUnit.MILLISECONDS)
-                    .join();
+            SendResult<String, String> result =
+                    sendAsync(topic, envelope.orderId().toString(), codec.write(envelope), correlationId).join();
             log.info("Published eventType={} eventId={} orderId={} topic={} partition={} offset={}",
                     envelope.eventType(),
                     envelope.eventId(),
@@ -45,5 +41,12 @@ public class EventPublisher {
         } catch (CompletionException e) {
             throw new EventPublishException(topic, envelope.eventId(), e.getCause());
         }
+    }
+
+    public CompletableFuture<SendResult<String, String>> sendAsync(
+            String topic, String key, String payload, String correlationId) {
+        ProducerRecord<String, String> record = new ProducerRecord<>(topic, key, payload);
+        record.headers().add(EventHeaders.CORRELATION_ID, correlationId.getBytes(StandardCharsets.UTF_8));
+        return kafkaTemplate.send(record).orTimeout(sendTimeout.toMillis(), TimeUnit.MILLISECONDS);
     }
 }

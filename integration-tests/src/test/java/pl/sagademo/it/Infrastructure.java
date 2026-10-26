@@ -10,6 +10,7 @@ import java.util.concurrent.ExecutionException;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.admin.NewTopic;
+import org.testcontainers.DockerClientFactory;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
@@ -33,6 +34,14 @@ public final class Infrastructure {
         postgres.start();
         createDatabases();
         createTopics();
+    }
+
+    public void pauseKafka() {
+        DockerClientFactory.lazyClient().pauseContainerCmd(kafka.getContainerId()).exec();
+    }
+
+    public void resumeKafka() {
+        DockerClientFactory.lazyClient().unpauseContainerCmd(kafka.getContainerId()).exec();
     }
 
     public String bootstrapServers() {

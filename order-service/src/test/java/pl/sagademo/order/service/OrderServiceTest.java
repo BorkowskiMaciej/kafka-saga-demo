@@ -24,7 +24,7 @@ import pl.sagademo.events.EventTypes;
 import pl.sagademo.events.Topics;
 import pl.sagademo.events.payload.OrderCreated;
 import pl.sagademo.events.payload.OrderStatus;
-import pl.sagademo.kafka.EventPublisher;
+import pl.sagademo.kafka.OutboxWriter;
 import pl.sagademo.order.api.CreateOrderRequest;
 import pl.sagademo.order.api.OrderResponse;
 import pl.sagademo.order.domain.Order;
@@ -38,7 +38,7 @@ class OrderServiceTest {
     private OrderRepository orderRepository;
 
     @Mock
-    private EventPublisher eventPublisher;
+    private OutboxWriter outboxWriter;
 
     @Captor
     private ArgumentCaptor<EventEnvelope<?>> envelopeCaptor;
@@ -47,7 +47,7 @@ class OrderServiceTest {
     private OrderService orderService;
 
     @Test
-    void savesOrderAsCreatedAndPublishesOrderCreated() {
+    void savesOrderAsCreatedAndEnqueuesOrderCreated() {
         when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> invocation.getArgument(0));
         CreateOrderRequest request = new CreateOrderRequest(
                 "customer-1",
@@ -61,7 +61,7 @@ class OrderServiceTest {
         assertThat(response.totalAmount()).isEqualByComparingTo("100.50");
         assertThat(response.items()).hasSize(2);
 
-        verify(eventPublisher).publish(eq(Topics.ORDER_CREATED), envelopeCaptor.capture(), anyString());
+        verify(outboxWriter).enqueue(eq(Topics.ORDER_CREATED), envelopeCaptor.capture(), anyString());
         EventEnvelope<?> envelope = envelopeCaptor.getValue();
         assertThat(envelope.eventType()).isEqualTo(EventTypes.ORDER_CREATED);
         assertThat(envelope.orderId()).isEqualTo(response.id());
