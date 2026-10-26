@@ -2,6 +2,7 @@ package pl.sagademo.kafka;
 
 import org.springframework.core.ResolvableType;
 import pl.sagademo.events.EventEnvelope;
+import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JavaType;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -18,8 +19,12 @@ public class EventCodec {
     }
 
     public <T> EventEnvelope<T> read(String json, Class<T> payloadType) {
-        JavaType type = jsonMapper.constructType(
-                ResolvableType.forClassWithGenerics(EventEnvelope.class, payloadType).getType());
-        return jsonMapper.readValue(json, type);
+        try {
+            JavaType type = jsonMapper.constructType(
+                    ResolvableType.forClassWithGenerics(EventEnvelope.class, payloadType).getType());
+            return jsonMapper.readValue(json, type);
+        } catch (JacksonException e) {
+            throw new EventDeserializationException(payloadType, e);
+        }
     }
 }
