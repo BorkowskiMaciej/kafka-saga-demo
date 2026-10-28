@@ -30,6 +30,7 @@
     <properties>
         <java.version>26</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <skipUnitTests>false</skipUnitTests>
     </properties>
 
     <dependencyManagement>
@@ -88,6 +89,7 @@
                     <artifactId>maven-surefire-plugin</artifactId>
                     <configuration>
                         <argLine>-javaagent:${settings.localRepository}/net/bytebuddy/byte-buddy-agent/${byte-buddy.version}/byte-buddy-agent-${byte-buddy.version}.jar</argLine>
+                        <skipTests>${skipUnitTests}</skipTests>
                     </configuration>
                 </plugin>
             </plugins>
