@@ -183,7 +183,7 @@ docker compose down -v
 For local development without application containers, Java 26 is required. The included Maven Wrapper downloads the expected Maven version automatically:
 
 ```bash
-./mvnw -DskipTests package
+./mvnw -DskipUnitTests=true package
 ```
 
 ## Trying the flow

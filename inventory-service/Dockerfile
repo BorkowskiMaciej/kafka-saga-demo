@@ -2,7 +2,7 @@ FROM eclipse-temurin:26-jdk AS build
 
 WORKDIR /workspace
 COPY . .
-RUN ./mvnw -pl inventory-service -am -DskipTests package
+RUN ./mvnw -pl inventory-service -am -DskipUnitTests=true package
 
 FROM eclipse-temurin:26-jre
 
