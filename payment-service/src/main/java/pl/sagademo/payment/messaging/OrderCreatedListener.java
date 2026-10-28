@@ -4,6 +4,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.kafka.annotation.DltHandler;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import pl.sagademo.events.EventEnvelope;
@@ -43,5 +44,10 @@ public class OrderCreatedListener {
         } finally {
             MDC.clear();
         }
+    }
+
+    @DltHandler
+    public void onDeadLetter(ConsumerRecord<String, String> record) {
+        KafkaRecords.logDeadLetter(log, record);
     }
 }

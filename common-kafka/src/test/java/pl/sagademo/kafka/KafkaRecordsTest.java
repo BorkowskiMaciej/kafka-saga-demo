@@ -39,6 +39,7 @@ class KafkaRecordsTest {
         assertThat(KafkaRecords.logContext(record, event))
                 .containsEntry("eventId", event.eventId().toString())
                 .containsEntry("orderId", orderId.toString())
+                .containsEntry("correlationId", orderId.toString())
                 .containsEntry("topic", "inventory.reserved")
                 .containsEntry("partition", "2")
                 .containsEntry("offset", "7");
