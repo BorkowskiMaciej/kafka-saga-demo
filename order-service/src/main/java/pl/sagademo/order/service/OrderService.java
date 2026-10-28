@@ -48,8 +48,9 @@ public class OrderService {
                 EventEnvelope.of(EventTypes.ORDER_CREATED, orderId, payload),
                 correlationId);
 
-        try (MDC.MDCCloseable ignored = MDC.putCloseable("orderId", orderId.toString())) {
-            log.info("Order created totalAmount={} correlationId={}", order.getTotalAmount(), correlationId);
+        try (MDC.MDCCloseable ignoredOrder = MDC.putCloseable("orderId", orderId.toString());
+                MDC.MDCCloseable ignoredCorrelation = MDC.putCloseable("correlationId", correlationId)) {
+            log.info("Order created totalAmount={}", order.getTotalAmount());
         }
         return OrderResponse.from(order);
     }

@@ -90,12 +90,17 @@ public class Order {
     }
 
     public void markPaid() {
+        if (status == OrderStatus.CONFIRMED) {
+            return;
+        }
         requireStatus(OrderStatus.CREATED, "mark as paid");
         status = OrderStatus.PAID;
     }
 
     public void confirm() {
-        requireStatus(OrderStatus.PAID, "confirm");
+        if (status != OrderStatus.CREATED && status != OrderStatus.PAID) {
+            throw new InvalidOrderTransitionException(id, status, "confirm");
+        }
         status = OrderStatus.CONFIRMED;
     }
 

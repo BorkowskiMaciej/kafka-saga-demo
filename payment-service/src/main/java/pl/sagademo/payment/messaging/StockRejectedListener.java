@@ -3,7 +3,6 @@ package pl.sagademo.payment.messaging;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
 import org.springframework.kafka.annotation.DltHandler;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
@@ -35,14 +34,15 @@ public class StockRejectedListener {
     @ResilientListener(retryTopicSuffix = "-payment-retry", dltTopicSuffix = "-payment-dlt")
     @KafkaListener(topics = Topics.STOCK_REJECTED)
     public void onStockRejected(ConsumerRecord<String, String> record) {
-        EventEnvelope<StockRejected> event = codec.read(record.value(), StockRejected.class);
-        MDC.setContextMap(KafkaRecords.logContext(record, event));
-        try {
+        try (KafkaRecords.LogContext ignored = KafkaRecords.openLogContext(record)) {
+            EventEnvelope<StockRejected> event = codec.read(record.value(), StockRejected.class);
+            KafkaRecords.addEventContext(event);
             log.info("Received StockRejected missing={}", event.payload().missingProductIds());
             idempotentExecutor.runOnce(
                     event, () -> paymentService.refund(event.orderId(), KafkaRecords.correlationId(record)));
-        } finally {
-            MDC.clear();
+        } catch (RuntimeException e) {
+            KafkaRecords.logProcessingFailure(log, record, "StockRejected processing failed", e);
+            throw e;
         }
     }
 

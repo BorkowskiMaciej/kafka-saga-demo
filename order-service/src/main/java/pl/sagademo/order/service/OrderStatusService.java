@@ -47,7 +47,7 @@ public class OrderStatusService {
     }
 
     private Order find(UUID orderId) {
-        return orderRepository.findById(orderId).orElseThrow(() -> new OrderNotFoundException(orderId));
+        return orderRepository.findByIdForUpdate(orderId).orElseThrow(() -> new OrderNotFoundException(orderId));
     }
 
     private void logTransition(OrderStatus before, Order order) {

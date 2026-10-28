@@ -1,14 +1,13 @@
 package pl.sagademo.inventory.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -20,9 +19,14 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import pl.sagademo.events.EventEnvelope;
 import pl.sagademo.events.EventTypes;
 import pl.sagademo.events.Topics;
+import pl.sagademo.events.payload.OrderCreated;
+import pl.sagademo.events.payload.OrderItem;
 import pl.sagademo.events.payload.StockRejected;
 import pl.sagademo.inventory.domain.OrderLineSnapshot;
 import pl.sagademo.inventory.domain.OrderLineSnapshotRepository;
+import pl.sagademo.inventory.domain.OrderProcessingLockRepository;
+import pl.sagademo.inventory.domain.PendingReservation;
+import pl.sagademo.inventory.domain.PendingReservationRepository;
 import pl.sagademo.inventory.domain.Product;
 import pl.sagademo.inventory.domain.ProductRepository;
 import pl.sagademo.inventory.domain.Reservation;
@@ -40,6 +44,12 @@ class InventoryServiceTest {
 
     @Mock
     private ReservationRepository reservationRepository;
+
+    @Mock
+    private PendingReservationRepository pendingReservationRepository;
+
+    @Mock
+    private OrderProcessingLockRepository orderProcessingLockRepository;
 
     @Mock
     private OutboxWriter outboxWriter;
@@ -132,12 +142,33 @@ class InventoryServiceTest {
     }
 
     @Test
-    void failsWhenOrderLinesAreNotStoredYet() {
+    void defersReservationWhenOrderLinesAreNotStoredYet() {
         UUID orderId = UUID.randomUUID();
         when(snapshotRepository.findByOrderId(orderId)).thenReturn(List.of());
 
-        assertThatThrownBy(() -> inventoryService.reserveStock(orderId, "corr-6"))
-                .isInstanceOf(OrderNotKnownException.class);
-        verifyNoInteractions(outboxWriter);
+        inventoryService.reserveStock(orderId, "corr-6");
+
+        verify(pendingReservationRepository).save(any(PendingReservation.class));
+    }
+
+    @Test
+    void completesDeferredReservationWhenOrderCreatedArrives() {
+        UUID orderId = UUID.randomUUID();
+        PendingReservation pending = PendingReservation.of(orderId, "corr-deferred");
+        Product product = new Product("p-1", 10);
+        when(pendingReservationRepository.findById(orderId)).thenReturn(Optional.of(pending));
+        when(snapshotRepository.findByOrderId(orderId))
+                .thenReturn(List.of(OrderLineSnapshot.of(orderId, "p-1", 2)));
+        when(productRepository.findAllByProductIdInOrderByProductId(any())).thenReturn(List.of(product));
+        OrderCreated order = OrderCreated.of(
+                orderId,
+                "customer-1",
+                List.of(new OrderItem("p-1", 2, new java.math.BigDecimal("10.00"))));
+
+        inventoryService.recordOrder(order, "corr-order-created");
+
+        assertThat(product.getStock()).isEqualTo(8);
+        verify(outboxWriter).enqueue(eq(Topics.STOCK_RESERVED), any(), eq("corr-deferred"));
+        verify(pendingReservationRepository).delete(pending);
     }
 }

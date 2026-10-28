@@ -3,7 +3,6 @@ package pl.sagademo.inventory.messaging;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
 import org.springframework.kafka.annotation.DltHandler;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
@@ -35,13 +34,16 @@ public class OrderCreatedListener {
     @ResilientListener(retryTopicSuffix = "-inventory-retry", dltTopicSuffix = "-inventory-dlt")
     @KafkaListener(topics = Topics.ORDER_CREATED)
     public void onOrderCreated(ConsumerRecord<String, String> record) {
-        EventEnvelope<OrderCreated> event = codec.read(record.value(), OrderCreated.class);
-        MDC.setContextMap(KafkaRecords.logContext(record, event));
-        try {
+        try (KafkaRecords.LogContext ignored = KafkaRecords.openLogContext(record)) {
+            EventEnvelope<OrderCreated> event = codec.read(record.value(), OrderCreated.class);
+            KafkaRecords.addEventContext(event);
             log.info("Received OrderCreated");
-            idempotentExecutor.runOnce(event, () -> inventoryService.recordOrder(event.payload()));
-        } finally {
-            MDC.clear();
+            idempotentExecutor.runOnce(
+                    event,
+                    () -> inventoryService.recordOrder(event.payload(), KafkaRecords.correlationId(record)));
+        } catch (RuntimeException e) {
+            KafkaRecords.logProcessingFailure(log, record, "OrderCreated processing failed", e);
+            throw e;
         }
     }
 

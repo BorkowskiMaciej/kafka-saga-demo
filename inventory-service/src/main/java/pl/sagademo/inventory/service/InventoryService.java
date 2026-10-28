@@ -18,6 +18,9 @@ import pl.sagademo.events.payload.StockRejected;
 import pl.sagademo.events.payload.StockReserved;
 import pl.sagademo.inventory.domain.OrderLineSnapshot;
 import pl.sagademo.inventory.domain.OrderLineSnapshotRepository;
+import pl.sagademo.inventory.domain.OrderProcessingLockRepository;
+import pl.sagademo.inventory.domain.PendingReservation;
+import pl.sagademo.inventory.domain.PendingReservationRepository;
 import pl.sagademo.inventory.domain.Product;
 import pl.sagademo.inventory.domain.ProductRepository;
 import pl.sagademo.inventory.domain.Reservation;
@@ -32,35 +35,53 @@ public class InventoryService {
     private final ProductRepository productRepository;
     private final OrderLineSnapshotRepository snapshotRepository;
     private final ReservationRepository reservationRepository;
+    private final PendingReservationRepository pendingReservationRepository;
+    private final OrderProcessingLockRepository orderProcessingLockRepository;
     private final OutboxWriter outboxWriter;
 
     public InventoryService(
             ProductRepository productRepository,
             OrderLineSnapshotRepository snapshotRepository,
             ReservationRepository reservationRepository,
+            PendingReservationRepository pendingReservationRepository,
+            OrderProcessingLockRepository orderProcessingLockRepository,
             OutboxWriter outboxWriter) {
         this.productRepository = productRepository;
         this.snapshotRepository = snapshotRepository;
         this.reservationRepository = reservationRepository;
+        this.pendingReservationRepository = pendingReservationRepository;
+        this.orderProcessingLockRepository = orderProcessingLockRepository;
         this.outboxWriter = outboxWriter;
     }
 
     @Transactional
-    public void recordOrder(OrderCreated order) {
+    public void recordOrder(OrderCreated order, String correlationId) {
+        lockOrder(order.orderId());
         List<OrderLineSnapshot> lines = order.items().stream()
                 .map(item -> OrderLineSnapshot.of(order.orderId(), item.productId(), item.quantity()))
                 .toList();
         snapshotRepository.saveAll(lines);
         log.info("Order lines stored count={}", lines.size());
+        pendingReservationRepository.findById(order.orderId()).ifPresent(pending -> {
+            reserveKnownOrder(order.orderId(), pending.getCorrelationId());
+            pendingReservationRepository.delete(pending);
+        });
     }
 
     @Transactional
     public void reserveStock(UUID orderId, String correlationId) {
+        lockOrder(orderId);
         List<OrderLineSnapshot> lines = snapshotRepository.findByOrderId(orderId);
         if (lines.isEmpty()) {
-            throw new OrderNotKnownException(orderId);
+            pendingReservationRepository.save(PendingReservation.of(orderId, correlationId));
+            log.info("Stock reservation deferred until OrderCreated arrives");
+            return;
         }
+        reserveKnownOrder(orderId, correlationId);
+    }
 
+    private void reserveKnownOrder(UUID orderId, String correlationId) {
+        List<OrderLineSnapshot> lines = snapshotRepository.findByOrderId(orderId);
         Map<String, Integer> required = lines.stream().collect(Collectors.toMap(
                 OrderLineSnapshot::getProductId,
                 OrderLineSnapshot::getQuantity,
@@ -92,6 +113,10 @@ public class InventoryService {
                 EventEnvelope.of(EventTypes.STOCK_REJECTED, orderId, new StockRejected(orderId, missing)),
                 correlationId);
         log.info("Stock rejected missing={}", missing);
+    }
+
+    private void lockOrder(UUID orderId) {
+        orderProcessingLockRepository.lock(orderId);
     }
 
     private static boolean canFulfill(Product product, int quantity) {

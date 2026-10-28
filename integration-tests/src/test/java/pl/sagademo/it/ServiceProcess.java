@@ -110,6 +110,20 @@ public final class ServiceProcess {
         }
     }
 
+    public boolean logContains(String... fragments) {
+        try {
+            String log = Files.readString(logFile);
+            for (String fragment : fragments) {
+                if (!log.contains(fragment)) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
     private boolean isHealthy() {
         HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl() + "/actuator/health"))
                 .timeout(Duration.ofSeconds(2))

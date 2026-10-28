@@ -5,13 +5,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
 import pl.sagademo.events.EventEnvelope;
 import pl.sagademo.events.EventHeaders;
 import pl.sagademo.events.EventTypes;
 import pl.sagademo.events.payload.StockReserved;
 
 class KafkaRecordsTest {
+
+    @AfterEach
+    void clearMdc() {
+        MDC.clear();
+    }
 
     @Test
     void readsCorrelationIdFromHeader() {
@@ -43,5 +50,18 @@ class KafkaRecordsTest {
                 .containsEntry("topic", "inventory.reserved")
                 .containsEntry("partition", "2")
                 .containsEntry("offset", "7");
+    }
+
+    @Test
+    void restoresExistingMdcAfterRecordContextIsClosed() {
+        ConsumerRecord<String, String> record = new ConsumerRecord<>("orders.created", 1, 5L, "order-1", "value");
+        MDC.put("traceId", "trace-1");
+
+        try (KafkaRecords.LogContext ignored = KafkaRecords.openLogContext(record)) {
+            assertThat(MDC.get("correlationId")).isEqualTo("order-1");
+            assertThat(MDC.get("traceId")).isEqualTo("trace-1");
+        }
+
+        assertThat(MDC.getCopyOfContextMap()).containsExactlyEntriesOf(java.util.Map.of("traceId", "trace-1"));
     }
 }

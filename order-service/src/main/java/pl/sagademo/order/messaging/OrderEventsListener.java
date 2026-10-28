@@ -3,7 +3,6 @@ package pl.sagademo.order.messaging;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
 import org.springframework.kafka.annotation.DltHandler;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
@@ -39,38 +38,48 @@ public class OrderEventsListener {
     @ResilientListener(retryTopicSuffix = "-order-retry", dltTopicSuffix = "-order-dlt")
     @KafkaListener(topics = Topics.PAYMENT_COMPLETED)
     public void onPaymentCompleted(ConsumerRecord<String, String> record) {
-        EventEnvelope<PaymentCompleted> event = codec.read(record.value(), PaymentCompleted.class);
+        EventEnvelope<PaymentCompleted> event = read(record, PaymentCompleted.class);
         handle(record, event, () -> orderStatusService.markPaid(event.orderId()));
     }
 
     @ResilientListener(retryTopicSuffix = "-order-retry", dltTopicSuffix = "-order-dlt")
     @KafkaListener(topics = Topics.PAYMENT_FAILED)
     public void onPaymentFailed(ConsumerRecord<String, String> record) {
-        EventEnvelope<PaymentFailed> event = codec.read(record.value(), PaymentFailed.class);
+        EventEnvelope<PaymentFailed> event = read(record, PaymentFailed.class);
         handle(record, event, () -> orderStatusService.cancel(event.orderId(), CancellationReason.PAYMENT_FAILED));
     }
 
     @ResilientListener(retryTopicSuffix = "-order-retry", dltTopicSuffix = "-order-dlt")
     @KafkaListener(topics = Topics.STOCK_RESERVED)
     public void onStockReserved(ConsumerRecord<String, String> record) {
-        EventEnvelope<StockReserved> event = codec.read(record.value(), StockReserved.class);
+        EventEnvelope<StockReserved> event = read(record, StockReserved.class);
         handle(record, event, () -> orderStatusService.confirm(event.orderId()));
     }
 
     @ResilientListener(retryTopicSuffix = "-order-retry", dltTopicSuffix = "-order-dlt")
     @KafkaListener(topics = Topics.STOCK_REJECTED)
     public void onStockRejected(ConsumerRecord<String, String> record) {
-        EventEnvelope<StockRejected> event = codec.read(record.value(), StockRejected.class);
+        EventEnvelope<StockRejected> event = read(record, StockRejected.class);
         handle(record, event, () -> orderStatusService.cancel(event.orderId(), CancellationReason.OUT_OF_STOCK));
     }
 
     private void handle(ConsumerRecord<String, String> record, EventEnvelope<?> event, Runnable action) {
-        MDC.setContextMap(KafkaRecords.logContext(record, event));
-        try {
+        try (KafkaRecords.LogContext ignored = KafkaRecords.openLogContext(record)) {
+            KafkaRecords.addEventContext(event);
             log.info("Received {}", event.eventType());
             idempotentExecutor.runOnce(event, action);
-        } finally {
-            MDC.clear();
+        } catch (RuntimeException e) {
+            KafkaRecords.logProcessingFailure(log, record, event.eventType() + " processing failed", e);
+            throw e;
+        }
+    }
+
+    private <T> EventEnvelope<T> read(ConsumerRecord<String, String> record, Class<T> payloadType) {
+        try (KafkaRecords.LogContext ignored = KafkaRecords.openLogContext(record)) {
+            return codec.read(record.value(), payloadType);
+        } catch (RuntimeException e) {
+            KafkaRecords.logProcessingFailure(log, record, "Kafka event deserialization failed", e);
+            throw e;
         }
     }
 

@@ -9,5 +9,6 @@ public record OutboxProperties(
         @DefaultValue("200ms") Duration pollInterval,
         @DefaultValue("100") int batchSize,
         @DefaultValue("1h") Duration retention,
+        @DefaultValue("7d") Duration processedEventsRetention,
         @DefaultValue("5s") Duration sendTimeout) {
 }

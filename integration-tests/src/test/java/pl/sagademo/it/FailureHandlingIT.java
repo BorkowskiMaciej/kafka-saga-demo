@@ -11,7 +11,6 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import pl.sagademo.events.Topics;
@@ -35,6 +34,10 @@ class FailureHandlingIT {
 
         assertThat(env.kafka().awaitRecords("orders.created-payment-dlt", keyIs(key), 1, TIMEOUT)).hasSize(1);
         assertThat(env.kafka().awaitRecords("orders.created-inventory-dlt", keyIs(key), 1, TIMEOUT)).hasSize(1);
+        await("DLT handlers log the failure with correlation context")
+                .atMost(TIMEOUT)
+                .until(() -> env.paymentService().logContains("Message sent to DLT", key)
+                        && env.inventoryService().logContains("Message sent to DLT", key));
         for (String service : List.of("payment", "inventory")) {
             for (int index = 0; index < 3; index++) {
                 String retryTopic = "orders.created-" + service + "-retry-" + index;
@@ -44,24 +47,18 @@ class FailureHandlingIT {
     }
 
     @Test
-    void unprocessableMessageIsRetriedWithBackoffAndThenDeadLettered() {
+    void paymentCompletedBeforeOrderCreatedIsDeferredByInventory() {
         UUID unknownOrder = UUID.randomUUID();
         String key = unknownOrder.toString();
-        long sentAt = System.currentTimeMillis();
 
         env.kafka().send(Topics.PAYMENT_COMPLETED, key, paymentCompleted(unknownOrder));
+        env.kafka().send(Topics.ORDER_CREATED, key, orderCreated(unknownOrder));
 
-        for (String service : List.of("inventory", "order")) {
-            List<ConsumerRecord<String, String>> deadLetters = env.kafka()
-                    .awaitRecords(Topics.PAYMENT_COMPLETED + "-" + service + "-dlt", keyIs(key), 1, TIMEOUT);
-            assertThat(deadLetters).as("DLT of %s", service).hasSize(1);
-            assertThat(deadLetters.getFirst().timestamp() - sentAt)
-                    .as("backoff before DLT of %s", service)
-                    .isGreaterThanOrEqualTo(5_000L);
-            for (int index = 0; index < 3; index++) {
-                String retryTopic = Topics.PAYMENT_COMPLETED + "-" + service + "-retry-" + index;
-                assertThat(env.kafka().snapshot(retryTopic, keyIs(key))).as(retryTopic).hasSize(1);
-            }
+        assertThat(env.kafka().awaitRecords(Topics.STOCK_RESERVED, keyIs(key), 1, TIMEOUT)).hasSize(1);
+        assertThat(env.kafka().snapshot(Topics.PAYMENT_COMPLETED + "-inventory-dlt", keyIs(key))).isEmpty();
+        for (int index = 0; index < 3; index++) {
+            String retryTopic = Topics.PAYMENT_COMPLETED + "-inventory-retry-" + index;
+            assertThat(env.kafka().snapshot(retryTopic, keyIs(key))).as(retryTopic).isEmpty();
         }
     }
 
@@ -101,5 +98,11 @@ class FailureHandlingIT {
         return """
                 {"eventId":"%s","eventType":"PaymentCompleted","occurredAt":"%s","version":1,"orderId":"%s","payload":{"orderId":"%s","paymentId":"%s","amount":100.00}}"""
                 .formatted(UUID.randomUUID(), Instant.now(), orderId, orderId, UUID.randomUUID());
+    }
+
+    private static String orderCreated(UUID orderId) {
+        return """
+                {"eventId":"%s","eventType":"OrderCreated","occurredAt":"%s","version":1,"orderId":"%s","payload":{"orderId":"%s","customerId":"out-of-order","items":[{"productId":"p-1","quantity":1,"unitPrice":6000.00}],"totalAmount":6000.00}}"""
+                .formatted(UUID.randomUUID(), Instant.now(), orderId, orderId);
     }
 }

@@ -20,17 +20,27 @@ public class OutboxRelay implements SmartLifecycle {
 
     private static final Logger log = LoggerFactory.getLogger(OutboxRelay.class);
 
-    private static final long ADVISORY_LOCK_KEY = 7_429_001L;
     private static final long CLEANUP_INTERVAL_NANOS = Duration.ofMinutes(1).toNanos();
+    private static final Duration CLAIM_TIMEOUT = Duration.ofSeconds(30);
 
-    private static final String LOCK_SQL = "SELECT pg_try_advisory_xact_lock(:key)";
     private static final String SELECT_SQL =
             "SELECT seq, event_id, event_type, topic, message_key, payload, correlation_id "
-                    + "FROM outbox WHERE published_at IS NULL ORDER BY seq LIMIT :limit";
-    private static final String MARK_SQL = "UPDATE outbox SET published_at = now() WHERE seq IN (:seqs)";
+                    + "FROM outbox WHERE published_at IS NULL "
+                    + "AND (claimed_at IS NULL OR claimed_at < now() - make_interval(secs => :claimTimeout)) "
+                    + "ORDER BY seq LIMIT :limit FOR UPDATE SKIP LOCKED";
+    private static final String CLAIM_SQL =
+            "UPDATE outbox SET claimed_by = :relayId, claimed_at = now() WHERE seq IN (:seqs)";
+    private static final String MARK_SQL =
+            "UPDATE outbox SET published_at = now(), claimed_by = NULL, claimed_at = NULL "
+                    + "WHERE claimed_by = :relayId AND seq IN (:seqs)";
+    private static final String RELEASE_SQL =
+            "UPDATE outbox SET claimed_by = NULL, claimed_at = NULL "
+                    + "WHERE claimed_by = :relayId AND seq IN (:seqs)";
     private static final String CLEANUP_SQL =
             "DELETE FROM outbox WHERE published_at IS NOT NULL "
                     + "AND published_at < now() - make_interval(secs => :seconds)";
+    private static final String PROCESSED_EVENTS_CLEANUP_SQL =
+            "DELETE FROM processed_events WHERE processed_at < now() - make_interval(secs => :seconds)";
 
     private record Row(
             long seq, UUID eventId, String eventType, String topic, String key, String payload, String correlationId) {
@@ -41,6 +51,7 @@ public class OutboxRelay implements SmartLifecycle {
     private final EventPublisher publisher;
     private final OutboxProperties properties;
     private final Semaphore signal = new Semaphore(0);
+    private final UUID relayId = UUID.randomUUID();
 
     private volatile boolean running;
     private Thread thread;
@@ -116,44 +127,60 @@ public class OutboxRelay implements SmartLifecycle {
     }
 
     private int publishBatch() {
-        Integer published = transactionTemplate.execute(status -> {
-            Boolean locked = jdbcClient.sql(LOCK_SQL).param("key", ADVISORY_LOCK_KEY).query(Boolean.class).single();
-            if (!Boolean.TRUE.equals(locked)) {
-                return 0;
-            }
-            List<Row> rows = jdbcClient.sql(SELECT_SQL)
+        List<Row> rows = transactionTemplate.execute(status -> {
+            List<Row> claimed = jdbcClient.sql(SELECT_SQL)
                     .param("limit", properties.batchSize())
+                    .param("claimTimeout", (double) CLAIM_TIMEOUT.toSeconds())
                     .query(OutboxRelay::mapRow)
                     .list();
-            if (rows.isEmpty()) {
-                return 0;
+            if (!claimed.isEmpty()) {
+                jdbcClient.sql(CLAIM_SQL)
+                        .param("relayId", relayId)
+                        .param("seqs", claimed.stream().map(Row::seq).toList())
+                        .update();
             }
-            List<CompletableFuture<SendResult<String, String>>> sends = rows.stream().map(this::send).toList();
-            List<Long> delivered = new ArrayList<>();
-            for (int i = 0; i < rows.size(); i++) {
-                Row row = rows.get(i);
-                try {
-                    SendResult<String, String> result = sends.get(i).join();
-                    delivered.add(row.seq());
-                    log.info("Published eventType={} eventId={} orderId={} topic={} partition={} offset={}",
-                            row.eventType(),
-                            row.eventId(),
-                            row.key(),
-                            row.topic(),
-                            result.getRecordMetadata().partition(),
-                            result.getRecordMetadata().offset());
-                } catch (RuntimeException e) {
-                    log.warn("Outbox publish failed eventType={} eventId={} topic={}: {}",
-                            row.eventType(), row.eventId(), row.topic(), e.toString());
-                    break;
-                }
-            }
-            if (!delivered.isEmpty()) {
-                jdbcClient.sql(MARK_SQL).param("seqs", delivered).update();
-            }
-            return delivered.size();
+            return claimed;
         });
-        return published == null ? 0 : published;
+        if (rows == null || rows.isEmpty()) {
+            return 0;
+        }
+
+        List<CompletableFuture<SendResult<String, String>>> sends = rows.stream().map(this::send).toList();
+        List<Long> delivered = new ArrayList<>();
+        List<Long> failed = new ArrayList<>();
+        for (int i = 0; i < rows.size(); i++) {
+            Row row = rows.get(i);
+            try {
+                SendResult<String, String> result = sends.get(i).join();
+                delivered.add(row.seq());
+                log.info("Published eventType={} eventId={} orderId={} topic={} partition={} offset={}",
+                        row.eventType(),
+                        row.eventId(),
+                        row.key(),
+                        row.topic(),
+                        result.getRecordMetadata().partition(),
+                        result.getRecordMetadata().offset());
+            } catch (RuntimeException e) {
+                failed.add(row.seq());
+                log.warn("Outbox publish failed eventType={} eventId={} topic={}: {}",
+                        row.eventType(), row.eventId(), row.topic(), e.toString());
+            }
+        }
+        transactionTemplate.executeWithoutResult(status -> {
+            if (!delivered.isEmpty()) {
+                jdbcClient.sql(MARK_SQL)
+                        .param("relayId", relayId)
+                        .param("seqs", delivered)
+                        .update();
+            }
+            if (!failed.isEmpty()) {
+                jdbcClient.sql(RELEASE_SQL)
+                        .param("relayId", relayId)
+                        .param("seqs", failed)
+                        .update();
+            }
+        });
+        return delivered.size();
     }
 
     private CompletableFuture<SendResult<String, String>> send(Row row) {
@@ -175,6 +202,12 @@ public class OutboxRelay implements SmartLifecycle {
                 .update();
         if (removed > 0) {
             log.debug("Outbox cleanup removed={}", removed);
+        }
+        int processedRemoved = jdbcClient.sql(PROCESSED_EVENTS_CLEANUP_SQL)
+                .param("seconds", (double) properties.processedEventsRetention().toSeconds())
+                .update();
+        if (processedRemoved > 0) {
+            log.debug("Processed events cleanup removed={}", processedRemoved);
         }
     }
 
